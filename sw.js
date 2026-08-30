@@ -1,5 +1,5 @@
 // sw.js — cache the app shell so it loads offline and doesn't re-download on every open.
-const CACHE = 'gutsignal-v1';
+const CACHE = 'gutsignal-v2';
 const SHELL = [
   './',
   './index.html',
@@ -10,6 +10,7 @@ const SHELL = [
   './js/usda.js',
   './js/calc.js',
   './js/correlation.js',
+  './js/ocr.js',
   './icons/icon.svg',
 ];
 
@@ -30,9 +31,10 @@ self.addEventListener('activate', (e) => {
 self.addEventListener('fetch', (e) => {
   const url = new URL(e.request.url);
 
-  // Never cache USDA API calls — always go to network so data stays fresh;
-  // the app's own IndexedDB cache handles repeat-lookup savings.
-  if (url.hostname.includes('nal.usda.gov')) {
+  // Only manage caching for our own app shell. Cross-origin requests — the USDA API,
+  // and the optional OCR library + its language data from a CDN — always go straight
+  // to the network; we don't want to cache or interfere with those.
+  if (url.origin !== self.location.origin) {
     return;
   }
 

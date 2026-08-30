@@ -61,6 +61,43 @@ diagnosis**:
 - This tool doesn't replace your gastroenterologist or dietitian, especially before cutting
   foods out of your diet — nutritional adequacy matters as much as trigger avoidance.
 
+## Auto-reading a label (optional)
+
+On the label-photo card, tapping **"Auto-read this label"** downloads a text-recognition
+library (Tesseract.js, roughly 5-10MB total including the English model) the first time
+you use it — your browser caches it after that, so it's a one-time cost, not per-photo.
+It fills in whatever fields it could confidently read; **always check the numbers against
+the label before saving**, since OCR from phone photos misreads digits often enough to
+matter (a "3" read as "8" would throw off your data). Skipping this button and typing
+numbers manually costs zero extra data and is just as valid a workflow.
+
+## Updating the app (no reinstall needed)
+
+This is a web app, not a native app — "updating" just means replacing the files at the
+same URL you're already using. Your data is untouched by this, because it lives in your
+phone's IndexedDB, which is tied to that URL, not to the app files.
+
+**If you're on GitHub Pages:** push the new files to the same repo/branch. Pages rebuilds
+automatically in a minute or two.
+
+**To make sure your phone actually picks up the update:**
+1. Fully close the app (swipe it away from recent apps — not just navigate away).
+2. Reopen it from your home screen. The service worker checks for changes on launch and
+   will fetch anything new.
+3. Check Settings → About — the version number there confirms which build you're on.
+
+**What's preserved automatically:** profile, meals, symptoms, check-ins, custom foods,
+and your USDA API key — all in IndexedDB, untouched by a file update.
+
+**What would wipe it (avoid these unless you mean to):**
+- Uninstalling the home-screen app / "Clear & reset" in Chrome site settings
+- Using a different hosting URL or domain than before (IndexedDB is per-origin — a new
+  domain looks like a brand-new site with no data, even if the code is identical)
+- Manually clearing browsing data for the site
+
+Export your data (Settings → Export my data) before any big change as a safety net —
+it's a good habit before switching hosts, phones, or doing a from-scratch reinstall.
+
 ## Data export
 
 Settings → Export my data (JSON) gives you a full local backup any time — useful before

@@ -100,13 +100,30 @@
     </div>
 
     <div class="card">
+      <div class="row between"><h3>Made something homemade? Estimate it from ingredients</h3></div>
+      <p style="font-size:0.8rem;color:var(--ink-muted)">Add every ingredient with the amount you used, say how many servings the batch makes, and this splits the totals per serving — like a homemade sushi roll, a casserole, or a soup.</p>
+      <label for="recipe-name">Recipe name</label>
+      <input type="text" id="recipe-name" placeholder="e.g. Homemade California roll" />
+      <label for="recipe-food-search">Search USDA for an ingredient</label>
+      <input type="text" id="recipe-food-search" placeholder="e.g. cooked white rice" />
+      <div id="recipe-food-results"></div>
+      <div class="row between" style="margin-top:6px;"><h3>Ingredients added</h3><span class="pill neutral" id="recipe-item-count">0</span></div>
+      <div id="current-recipe-items"><div class="empty-state">Add each ingredient with its amount.</div></div>
+      <label for="recipe-servings" style="margin-top:10px;">Servings this batch makes</label>
+      <input type="number" id="recipe-servings" min="1" placeholder="e.g. 4" />
+      <button class="full secondary" id="save-recipe">Save as a custom food</button>
+      <p id="recipe-status" style="font-size:0.8rem;color:var(--ink-muted);margin-top:8px;"></p>
+    </div>
+
+    <div class="card">
       <div class="row between">
         <h3>Not in USDA? Add from a label photo</h3>
       </div>
       <p style="font-size:0.8rem;color:var(--ink-muted)">Photograph the nutrition facts panel, keep it open for reference, and type in the numbers. The photo stays on this device only.</p>
       <label for="custom-photo">Label photo (optional)</label>
       <input type="file" id="custom-photo" accept="image/*" capture="environment" />
-      <img id="custom-photo-preview" class="hidden" style="width:100%;border-radius:10px;margin-bottom:12px;" />
+      <img id="custom-photo-preview" class="hidden" style="width:100%;border-radius:10px;margin-bottom:10px;" />
+      <button class="full secondary hidden" id="auto-read-btn" style="margin-bottom:12px;">Auto-read this label (downloads a text-reading tool, ~5-10MB, first time only)</button>
 
       <label for="custom-name">Food name</label>
       <input type="text" id="custom-name" placeholder="e.g. Trail mix bar" />
@@ -147,13 +164,13 @@
   <section id="view-symptoms" class="view hidden">
     <div class="card">
       <h3>Log a symptom</h3>
-      <label>GI severity (0 none – 10 severe)</label>
+      <label>GI severity (0 none – 5 severe)</label>
       <div class="scale" id="severity-scale">
-        <button data-v="0">0</button><button data-v="2">2</button><button data-v="4">4</button><button data-v="6">6</button><button data-v="8">8</button><button data-v="10">10</button>
+        <button data-v="0">0</button><button data-v="1">1</button><button data-v="2">2</button><button data-v="3">3</button><button data-v="4">4</button><button data-v="5">5</button>
       </div>
-      <label>Pain scale (0 none – 10 severe)</label>
+      <label>Pain scale (0 none – 5 severe)</label>
       <div class="scale" id="pain-scale">
-        <button data-v="0">0</button><button data-v="2">2</button><button data-v="4">4</button><button data-v="6">6</button><button data-v="8">8</button><button data-v="10">10</button>
+        <button data-v="0">0</button><button data-v="1">1</button><button data-v="2">2</button><button data-v="3">3</button><button data-v="4">4</button><button data-v="5">5</button>
       </div>
       <label for="pain-location">Pain location (optional)</label>
       <input type="text" id="pain-location" placeholder="e.g. lower right abdomen" />
@@ -208,6 +225,17 @@
     </div>
 
     <div class="card">
+      <div class="row between"><h3>Daily nutrition targets</h3></div>
+      <p style="font-size:0.8rem;color:var(--ink-muted)">Calculated from your profile by default. Override any value if you're using numbers from another source (e.g. the USDA DRI Calculator or your dietitian) — overrides stick until you reset them.</p>
+      <div id="target-fields"></div>
+      <div class="grid-2">
+        <button class="secondary" id="reset-targets">Reset to calculated</button>
+        <button id="save-targets">Save targets</button>
+      </div>
+      <p id="targets-status" style="font-size:0.8rem;color:var(--ink-muted);margin-top:8px;"></p>
+    </div>
+
+    <div class="card">
       <h3>USDA FoodData Central API key</h3>
       <p style="font-size:0.8rem;color:var(--ink-muted)">Free at api.data.gov/signup. Stored only on this device.</p>
       <input type="text" id="usda-key" placeholder="Paste your API key" />
@@ -219,6 +247,11 @@
       <h3>Data</h3>
       <p style="font-size:0.8rem;color:var(--ink-muted)">Everything is stored locally in this browser only. Nothing is uploaded anywhere.</p>
       <button class="full danger" id="export-data">Export my data (JSON)</button>
+    </div>
+
+    <div class="card">
+      <h3>About</h3>
+      <p style="font-size:0.8rem;color:var(--ink-muted)">GutSignal <strong id="app-version">v1.2</strong> — updating replaces these files only; your profile, meals, symptoms, and API key stay put.</p>
     </div>
   </section>
 

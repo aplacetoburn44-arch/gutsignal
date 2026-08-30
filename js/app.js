@@ -2,12 +2,14 @@ import { DB } from './db.js';
 import { USDA } from './usda.js';
 import { driTargets, sumNutrients } from './calc.js';
 import { computeTriggerScores, safetyLabel } from './correlation.js';
+import { recognizeLabel, parseNutritionText } from './ocr.js';
 
 const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => Array.from(document.querySelectorAll(sel));
 
 let profile = null;
 let currentMealItems = []; // transient, before saving
+let currentRecipeItems = []; // transient, for the recipe builder
 let scaleValues = { stress: null, sleepQuality: null, severity: null, pain: null };
 
 // ---------- Navigation ----------
@@ -59,7 +61,8 @@ async function renderToday() {
   // Today's calories
   const todaysMeals = meals.filter((m) => todayDateKey(new Date(m.timestamp)) === todayDateKey());
   const totals = sumNutrients(todaysMeals.map((m) => m.totalNutrients));
-  const target = profile ? driTargets(profile).calories : null;
+  const targets = await getEffectiveTargets();
+  const target = targets ? targets.calories : null;
 
   if (target) {
     const pct = Math.min(100, Math.round(((totals.calories || 0) / target) * 100));
@@ -72,7 +75,7 @@ async function renderToday() {
     $('#today-cal-pill').textContent = '—';
   }
 
-  const targets2 = profile ? driTargets(profile) : null;
+  const targets2 = targets;
   $('#today-protein-stat').textContent = targets2
     ? `${Math.round(totals.protein || 0)} / ${targets2.protein_g}g`
     : `${Math.round(totals.protein || 0)}g`;
@@ -152,16 +155,26 @@ async function saveCheckin() {
 // ---------- Meals view ----------
 let searchDebounce = null;
 function initFoodSearch() {
-  $('#food-search').addEventListener('input', (e) => {
-    clearTimeout(searchDebounce);
-    const q = e.target.value.trim();
-    if (q.length < 2) { $('#food-results').innerHTML = ''; return; }
-    searchDebounce = setTimeout(() => runFoodSearch(q), 400);
+  attachFoodSearch('#food-search', '#food-results', (item) => {
+    currentMealItems.push(item);
+    renderCurrentMeal();
+  });
+  attachFoodSearch('#recipe-food-search', '#recipe-food-results', (item) => {
+    currentRecipeItems.push(item);
+    renderCurrentRecipeItems();
   });
 }
 
-async function runFoodSearch(query) {
-  const box = $('#food-results');
+function attachFoodSearch(inputSel, resultsSel, onAddItem) {
+  $(inputSel).addEventListener('input', (e) => {
+    clearTimeout(searchDebounce);
+    const q = e.target.value.trim();
+    if (q.length < 2) { $(resultsSel).innerHTML = ''; return; }
+    searchDebounce = setTimeout(() => runFoodSearch(q, $(resultsSel), onAddItem), 400);
+  });
+}
+
+async function runFoodSearch(query, box, onAddItem) {
   box.innerHTML = '<p style="font-size:0.85rem;color:var(--ink-muted)">Searching…</p>';
   try {
     const results = await USDA.search(query);
@@ -181,14 +194,14 @@ async function runFoodSearch(query) {
       )
       .join('');
     box.querySelectorAll('button[data-idx]').forEach((btn) => {
-      btn.addEventListener('click', () => openServingPicker(box, results[Number(btn.dataset.idx)], Number(btn.dataset.idx)));
+      btn.addEventListener('click', () => openServingPicker(box, results[Number(btn.dataset.idx)], Number(btn.dataset.idx), onAddItem));
     });
   } catch (err) {
     box.innerHTML = `<p style="font-size:0.85rem;color:var(--danger)">${err.message}</p>`;
   }
 }
 
-async function openServingPicker(box, searchResult, idx) {
+async function openServingPicker(box, searchResult, idx, onAddItem) {
   const picker = box.querySelector(`[data-picker="${idx}"]`);
   picker.classList.remove('hidden');
   picker.innerHTML = '<p style="font-size:0.82rem;color:var(--ink-muted)">Loading serving sizes…</p>';
@@ -200,10 +213,10 @@ async function openServingPicker(box, searchResult, idx) {
     picker.innerHTML = `<p style="font-size:0.82rem;color:var(--danger)">${err.message}</p>`;
     return;
   }
-  renderServingPickerUI(picker, food);
+  renderServingPickerUI(picker, food, onAddItem);
 }
 
-function renderServingPickerUI(picker, food) {
+function renderServingPickerUI(picker, food, onAddItem) {
   const portionOptions = (food.portions || [])
     .map((p, i) => `<option value="${i}">${p.label} (${Math.round(p.grams)}g)</option>`)
     .join('');
@@ -246,13 +259,13 @@ function renderServingPickerUI(picker, food) {
       gramsInput.style.outline = '2px solid var(--danger)';
       return;
     }
-    currentMealItems.push({
+    const item = {
       fdcId: food.fdcId,
       description: food.description,
       grams,
       nutrients: USDA.scaleTo(food, grams),
-    });
-    renderCurrentMeal();
+    };
+    onAddItem(item);
     picker.classList.add('hidden');
     picker.innerHTML = '';
   });
@@ -297,6 +310,63 @@ async function saveMeal() {
   renderToday();
 }
 
+// ---------- Recipe builder (estimate homemade dishes from ingredients) ----------
+function renderCurrentRecipeItems() {
+  const list = $('#current-recipe-items');
+  $('#recipe-item-count').textContent = currentRecipeItems.length;
+  if (currentRecipeItems.length === 0) {
+    list.innerHTML = '<div class="empty-state">Add each ingredient with its amount.</div>';
+    return;
+  }
+  list.innerHTML = currentRecipeItems
+    .map(
+      (it, i) => `<div class="meal-item-row"><span>${it.description} (${it.grams}g)</span>
+      <span>${Math.round(it.nutrients.calories || 0)} kcal <button class="ghost" data-rremove="${i}">✕</button></span></div>`
+    )
+    .join('');
+  list.querySelectorAll('button[data-rremove]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      currentRecipeItems.splice(Number(btn.dataset.rremove), 1);
+      renderCurrentRecipeItems();
+    });
+  });
+}
+
+async function saveRecipeAsFood() {
+  const name = $('#recipe-name').value.trim();
+  const servings = Number($('#recipe-servings').value);
+  const status = $('#recipe-status');
+  if (!name) { status.textContent = 'Name the recipe first.'; return; }
+  if (!servings || servings <= 0) { status.textContent = 'How many servings does this batch make?'; return; }
+  if (currentRecipeItems.length === 0) { status.textContent = 'Add at least one ingredient.'; return; }
+
+  const totalGrams = currentRecipeItems.reduce((sum, it) => sum + it.grams, 0);
+  const totalNutrients = sumNutrients(currentRecipeItems.map((it) => it.nutrients));
+  const gramsPerServing = totalGrams / servings;
+  const factor = 100 / gramsPerServing;
+  const nutrientsPer100g = {};
+  for (const [k, v] of Object.entries(totalNutrients)) {
+    nutrientsPer100g[k] = Math.round((v / servings) * factor * 10) / 10;
+  }
+
+  await DB.addCustomFood({
+    name,
+    servingLabel: `1 serving (~${Math.round(gramsPerServing)}g)`,
+    gramsPerServing: Math.round(gramsPerServing),
+    nutrientsPer100g,
+    photo: null,
+    isRecipe: true,
+    createdAt: Date.now(),
+  });
+
+  status.textContent = `Saved "${name}" as a custom food — find it under "My custom foods" to add to a meal.`;
+  currentRecipeItems = [];
+  renderCurrentRecipeItems();
+  $('#recipe-name').value = '';
+  $('#recipe-servings').value = '';
+  renderCustomFoodList();
+}
+
 // ---------- Custom foods (label photo) ----------
 let pendingPhotoDataUrl = null;
 
@@ -308,7 +378,50 @@ function initCustomPhoto() {
     const preview = $('#custom-photo-preview');
     preview.src = pendingPhotoDataUrl;
     preview.classList.remove('hidden');
+    $('#auto-read-btn').classList.remove('hidden');
   });
+  $('#auto-read-btn').addEventListener('click', autoReadLabel);
+}
+
+async function autoReadLabel() {
+  if (!pendingPhotoDataUrl) return;
+  const btn = $('#auto-read-btn');
+  const status = $('#custom-food-status');
+  btn.disabled = true;
+  status.textContent = 'Loading text recognition (first time only)…';
+
+  try {
+    const text = await recognizeLabel(pendingPhotoDataUrl, (m) => {
+      if (m.status === 'recognizing text') {
+        status.textContent = `Reading label… ${Math.round((m.progress || 0) * 100)}%`;
+      } else if (m.status) {
+        status.textContent = m.status.replace(/_/g, ' ') + '…';
+      }
+    });
+    const parsed = parseNutritionText(text);
+
+    const setIfFound = (id, val) => { if (val != null && !Number.isNaN(val)) $(id).value = val; };
+    setIfFound('#cf-calories', parsed.calories);
+    setIfFound('#cf-protein', parsed.protein);
+    setIfFound('#cf-carbs', parsed.carbs);
+    setIfFound('#cf-fat', parsed.fat);
+    setIfFound('#cf-fiber', parsed.fiber);
+    setIfFound('#cf-sugars', parsed.sugars);
+    setIfFound('#cf-sodium', parsed.sodium);
+    setIfFound('#cf-calcium', parsed.calcium);
+    setIfFound('#cf-iron', parsed.iron);
+    if (parsed.gramsPerServing) $('#custom-serving-grams').value = parsed.gramsPerServing;
+    if (parsed.servingLabel) $('#custom-serving-label').value = parsed.servingLabel;
+
+    const foundCount = Object.values(parsed).filter((v) => v != null).length;
+    status.textContent = foundCount > 0
+      ? `Auto-read filled in ${foundCount} field(s) — please check every number against the label before saving. OCR misreads digits sometimes.`
+      : `Couldn't confidently read that label. Try a clearer, well-lit photo, or just enter the numbers manually.`;
+  } catch (err) {
+    status.textContent = `Auto-read failed: ${err.message}`;
+  } finally {
+    btn.disabled = false;
+  }
 }
 
 /** Downscale + JPEG-compress a photo before storing, so IndexedDB doesn't bloat. */
@@ -368,6 +481,7 @@ async function saveCustomFood() {
     .forEach((id) => { $('#' + id).value = ''; });
   $('#custom-photo').value = '';
   $('#custom-photo-preview').classList.add('hidden');
+  $('#auto-read-btn').classList.add('hidden');
   pendingPhotoDataUrl = null;
   renderCustomFoodList();
 }
@@ -400,7 +514,7 @@ async function renderCustomFoodList() {
         description: f.name,
         nutrients: f.nutrientsPer100g,
         portions: [{ label: f.servingLabel, grams: f.gramsPerServing }],
-      });
+      }, (item) => { currentMealItems.push(item); renderCurrentMeal(); });
     });
   });
 }
@@ -412,9 +526,18 @@ async function renderMealHistory() {
   box.innerHTML = meals
     .map(
       (m) => `<div class="meal-item-row"><span>${new Date(m.timestamp).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })} · ${m.mealType}</span>
-      <span>${Math.round(m.totalNutrients.calories || 0)} kcal · ${m.items.length} item(s)</span></div>`
+      <span>${Math.round(m.totalNutrients.calories || 0)} kcal · ${m.items.length} item(s) <button class="ghost" data-delmeal="${m.id}">✕</button></span></div>`
     )
     .join('');
+  box.querySelectorAll('button[data-delmeal]').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      if (!confirm('Delete this meal entry?')) return;
+      await DB.deleteMeal(Number(btn.dataset.delmeal));
+      renderMealHistory();
+      renderToday();
+      renderTrends();
+    });
+  });
 }
 
 // ---------- Symptoms view ----------
@@ -444,9 +567,18 @@ async function renderSymptomHistory() {
   box.innerHTML = symptoms
     .map(
       (s) => `<div class="meal-item-row"><span>${new Date(s.timestamp).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</span>
-      <span>GI ${s.severity}/10 · Pain ${s.pain}/10${s.painLocation ? ' · ' + s.painLocation : ''}</span></div>`
+      <span>GI ${s.severity}/5 · Pain ${s.pain}/5${s.painLocation ? ' · ' + s.painLocation : ''} <button class="ghost" data-delsymptom="${s.id}">✕</button></span></div>`
     )
     .join('');
+  box.querySelectorAll('button[data-delsymptom]').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      if (!confirm('Delete this symptom entry?')) return;
+      await DB.deleteSymptom(Number(btn.dataset.delsymptom));
+      renderSymptomHistory();
+      renderToday();
+      renderTrends();
+    });
+  });
 }
 
 // ---------- Trends view ----------
@@ -463,7 +595,7 @@ async function renderTrends() {
   } else if (recentMeals.length === 0) {
     nutrientBox.innerHTML = '<div class="empty-state">Log meals to see nutrient trends.</div>';
   } else {
-    const targets = driTargets(profile);
+    const targets = await getEffectiveTargets();
     const rows = [
       ['Calories', totals.calories, targets.calories, ''],
       ['Protein', totals.protein, targets.protein_g, 'g'],
@@ -516,6 +648,63 @@ async function renderTrends() {
     .join('');
 }
 
+const TARGET_FIELDS = [
+  ['calories', 'Calories', 'kcal'],
+  ['protein_g', 'Protein', 'g'],
+  ['carbs_g', 'Carbs', 'g'],
+  ['fat_g', 'Fat', 'g'],
+  ['fiber_g', 'Fiber', 'g'],
+  ['calcium_mg', 'Calcium', 'mg'],
+  ['iron_mg', 'Iron', 'mg'],
+  ['magnesium_mg', 'Magnesium', 'mg'],
+  ['zinc_mg', 'Zinc', 'mg'],
+  ['potassium_mg', 'Potassium', 'mg'],
+  ['vitaminD_mcg', 'Vitamin D', 'mcg'],
+  ['vitaminB12_mcg', 'Vitamin B12', 'mcg'],
+  ['folate_mcg', 'Folate', 'mcg'],
+  ['vitaminC_mg', 'Vitamin C', 'mg'],
+  ['vitaminA_mcg', 'Vitamin A', 'mcg'],
+  ['sodium_mg_max', 'Sodium (max)', 'mg'],
+];
+
+async function getEffectiveTargets() {
+  if (!profile) return null;
+  const computed = driTargets(profile);
+  const overrides = await DB.getSetting('targetOverrides');
+  return overrides ? { ...computed, ...overrides } : computed;
+}
+
+function renderTargetFields(targets) {
+  const box = $('#target-fields');
+  box.innerHTML = `<div class="grid-2">${TARGET_FIELDS.map(
+    ([key, label, unit]) => `<div><label>${label} (${unit})</label><input type="number" step="any" id="t-${key}" value="${targets[key] ?? ''}" /></div>`
+  ).join('')}</div>`;
+}
+
+async function loadTargetsIntoForm() {
+  const targets = await getEffectiveTargets();
+  if (!targets) { $('#target-fields').innerHTML = '<p class="empty-state">Save your profile above first.</p>'; return; }
+  renderTargetFields(targets);
+}
+
+async function saveTargets() {
+  const overrides = {};
+  for (const [key] of TARGET_FIELDS) {
+    const val = $('#t-' + key).value;
+    if (val !== '') overrides[key] = Number(val);
+  }
+  await DB.saveSetting('targetOverrides', overrides);
+  $('#targets-status').textContent = 'Targets saved — these will be used everywhere instead of the calculated defaults.';
+  renderToday();
+}
+
+async function resetTargets() {
+  await DB.delete('settings', 'targetOverrides');
+  await loadTargetsIntoForm();
+  $('#targets-status').textContent = 'Reset to calculated defaults.';
+  renderToday();
+}
+
 // ---------- Settings ----------
 async function loadProfileIntoForm() {
   profile = await DB.getProfile();
@@ -545,6 +734,7 @@ async function saveProfile() {
   await DB.saveProfile(p);
   profile = p;
   $('#profile-status').textContent = 'Profile saved.';
+  await loadTargetsIntoForm();
   renderToday();
 }
 
@@ -585,8 +775,12 @@ async function init() {
   $('#save-key').addEventListener('click', saveKey);
   $('#export-data').addEventListener('click', exportData);
   $('#save-custom-food').addEventListener('click', saveCustomFood);
+  $('#save-targets').addEventListener('click', saveTargets);
+  $('#reset-targets').addEventListener('click', resetTargets);
+  $('#save-recipe').addEventListener('click', saveRecipeAsFood);
 
   await loadProfileIntoForm();
+  await loadTargetsIntoForm();
   await renderToday();
   await renderMealHistory();
   await renderSymptomHistory();
